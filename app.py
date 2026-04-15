@@ -55,6 +55,11 @@ login_manager.login_view = "login_page"
 FAILED_LOGINS = defaultdict(int)
 BLOCKED_IPS = {}
 
+# Insider threat: track download timestamps per user
+DOWNLOAD_LOG = defaultdict(list)
+DOWNLOAD_THRESHOLD = 5   # downloads
+DOWNLOAD_WINDOW = 60     # seconds
+
 
 # ================= GCS ================= #
 
@@ -627,6 +632,24 @@ def download_file(file_id):
     except Exception as e:
         print("GCS download error:", e)
         return "File not found in storage", 404
+
+    # ================= INSIDER THREAT DETECTION ================= #
+    now = datetime.utcnow()
+    uid = current_user.username
+    DOWNLOAD_LOG[uid] = [
+        t for t in DOWNLOAD_LOG[uid]
+        if (now - t).total_seconds() < DOWNLOAD_WINDOW
+    ]
+    DOWNLOAD_LOG[uid].append(now)
+
+    if len(DOWNLOAD_LOG[uid]) == DOWNLOAD_THRESHOLD:
+        db.session.add(SecurityEvent(
+            event_type=f"Insider Threat: Bulk download ({DOWNLOAD_THRESHOLD} files in {DOWNLOAD_WINDOW}s)",
+            user=uid,
+            ip=request.remote_addr,
+            severity="HIGH"
+        ))
+        db.session.commit()
 
     return send_file(
         io.BytesIO(data),
